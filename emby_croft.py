@@ -4,6 +4,7 @@ from enum import Enum
 from random import shuffle
 from collections import defaultdict
 import json
+import re
 
 try:
     # this import works when installing/running the skill
@@ -18,7 +19,6 @@ class IntentType(Enum):
     ARTIST = "artist"
     ALBUM = "album"
     SONG = "song"
-    PLAYLIST = "playlist"
 
     @staticmethod
     def from_string(enum_string):
@@ -26,7 +26,6 @@ class IntentType(Enum):
         for item_type in IntentType:
             if item_type.value == enum_string.lower():
                 return item_type
-
 
 class EmbyCroft(object):
 
@@ -41,7 +40,6 @@ class EmbyCroft(object):
                 device="Mycroft", client="Emby Skill", client_id=client_id, version=self.version)
         else:
             self.client = PublicEmbyClient(self.host, client_id=client_id)
-
 
     @staticmethod
     def determine_intent(intent: dict):
@@ -58,46 +56,34 @@ class EmbyCroft(object):
             return intent['artist'], IntentType.from_string('artist')
         elif 'album' in intent:
             return intent['album'], IntentType.from_string('album')
-        elif 'playlist' in intent:
-            return intent['playlist'], IntentType.from_string('playlist')
-        elif 'song' in intent:
-            return intent['song'], IntentType.from_string('song')
         else:
             return None
 
     def handle_intent(self, intent: str, intent_type: IntentType):
         """
         Returns songs for given intent if songs are found; none if not
-        :param intent_type:
         :param intent:
         :return:
         """
 
         songs = []
-        if intent_type == IntentType.MEDIA:
+        if intent == IntentType.MEDIA:
             # default to instant mix
             songs = self.find_songs(intent)
-        elif intent_type == IntentType.ARTIST:
+        elif intent == IntentType.ARTIST:
             # return songs by artist
             artist_items = self.search_artist(intent)
             if len(artist_items) > 0:
-                songs = self.get_songs_by_artist(artist_items[0].id)
+                #songs = self.get_songs_by_artist(artist_items[0].id)
+                songs = self.get_songs_by_artist(artist_items[0].id, "unknown-album")
                 # shuffle by default for songs by artist
                 shuffle(songs)
-        elif intent_type == IntentType.ALBUM:
+        elif intent == IntentType.ALBUM:
             # return songs by album
             album_items = self.search_album(intent)
             if len(album_items) > 0:
                 songs = self.get_songs_by_album(album_items[0].id)
-        elif intent_type == IntentType.PLAYLIST:
-            # return songs in playlist
-            playlist_items = self.search_playlist(intent)
-            songs = self.get_songs_by_playlist(playlist_items[0].id)
-        elif intent_type == IntentType.SONG:
-            # find Song
-            song_items = self.search_song(intent)
-            if len(song_items) > 0:
-                songs = self.convert_to_playable_songs([song_items[0]])
+
         return songs
 
     def find_songs(self, media_name, media_type=None)->[]:
@@ -121,13 +107,13 @@ class EmbyCroft(object):
         """
         return self.search(artist, [MediaItemType.ARTIST.value])
 
-    def search_album(self, artist):
+    def search_album(self, album):
         """
         Helper method to just search Emby for an album
         :param album:
         :return:
         """
-        return self.search(artist, [MediaItemType.ALBUM.value])
+        return self.search(album, [MediaItemType.ALBUM.value])
 
     def search_song(self, song):
         """
@@ -136,15 +122,6 @@ class EmbyCroft(object):
         :return:
         """
         return self.search(song, [MediaItemType.SONG.value])
-
-    def search_playlist(self, playlist):
-        """
-        Helper method to search Emby for a named playlist
-
-        :param playlist:
-        :return:
-        """
-        return self.search(playlist, [MediaItemType.PLAYLIST.value])
 
     def search(self, query, include_media_types=[]):
         """
@@ -188,7 +165,7 @@ class EmbyCroft(object):
 
         songs = []
         for item in items:
-            self.log.log(20, 'Instant Mix potential match: ' + item.name)
+            self.log.log(20, 'instant_mix_for_media() instant Mix potential match: ' + item.name)
             if len(songs) == 0:
                 songs = self.get_instant_mix_songs(item.id)
             else:
@@ -196,23 +173,24 @@ class EmbyCroft(object):
 
         return songs
 
-    def get_albums_by_artist(self, artist_id):
-        return self.client.get_albums_by_artist(artist_id)
+    # NOT CALLED?
+    #def get_albums_by_artist(self, artist_id):
+    #    return self.client.get_albums_by_artist(artist_id)
 
     def get_songs_by_album(self, album_id):
         response = self.client.get_songs_by_album(album_id)
-        return self.convert_response_to_playable_songs(response)
+        if response is None:
+          return None 
+        else:
+          self.log.log(20, "get_songs_by_album() calling self.convert_response_to_playable_songs")
+          return self.convert_response_to_playable_songs(response)
 
-    def get_songs_by_artist(self, artist_id):
-        response = self.client.get_songs_by_artist(artist_id)
+    def get_songs_by_artist(self, artist_id, album):
+        response = self.client.get_songs_by_artist(artist_id, album)
         return self.convert_response_to_playable_songs(response)
 
     def get_all_artists(self):
         return self.client.get_all_artists()
-
-    def get_songs_by_playlist(self, playlist_id):
-        response = self.client.get_songs_by_playlist(playlist_id)
-        return self.convert_response_to_playable_songs(response)
 
     def get_server_info_public(self):
         return self.client.get_server_info_public()
@@ -240,15 +218,15 @@ class EmbyCroft(object):
 
     @staticmethod
     def parse_response(response):
-        if response.text:
-            response_json = response.json()
-            return response_json["Items"]
+        if response is None:
+          return None 
+        elif response.text:
+          response_json = response.json()
+          return response_json["Items"]
 
-    def smart_parse_common_phrase(self, phrase: str):
+    def parse_common_phrase(self, phrase: str):
         """
-        Attempt to get keywords in phrase such as
-        {artist/album/song} and determine a users
-        intent
+        Attempts to match emby items with phrase
         :param phrase:
         :return:
         """
@@ -258,73 +236,142 @@ class EmbyCroft(object):
                        'album': MediaItemType.ALBUM,
                        'song': MediaItemType.SONG}
 
-        phrase = phrase.lower()
-
-        for removal in removals:
-            phrase = phrase.replace(removal, "")
-
-        # determine intent if exists
-        # does not handle play album by artist
-        intent = None
-        for media_type in media_types.keys():
-            if media_type in phrase:
-                intent = media_types.get(media_type)
-                logging.log(20, "Found intent in common phrase: " + media_type)
-                phrase = phrase.replace(media_type, "")
-                break
-
-        return phrase, intent
-
-    def parse_common_phrase(self, phrase: str):
-        """
-        Attempts to match emby items with phrase
-        :param phrase:
-        :return:
-        """
-
-        logging.log(20, "phrase: " + phrase)
-
-        phrase, intent = self.smart_parse_common_phrase(phrase)
-
-        include_media_types = []
-        if intent is not None:
-            include_media_types.append(intent.value)
-
-        results = self.search(phrase, include_media_types)
-
-        if results is None or len(results) is 0:
-            return None, None
-        else:
-            logging.log(20, "Found: " + str(len(results)) + " to parse")
+        # OLD CODE - commented out
+        # logging.log(20, "phrase: " + phrase)
+        #
+        # phrase, intent = self.smart_parse_common_phrase(phrase)
+        #
+        # include_media_types = []
+        # if intent is not None:
+        #     include_media_types.append(intent.value)
+        #
+        # results = self.search(phrase)
+        #
+        # if results is None or len(results) is 0:
+        #     return None, None
+        # else:
+        #     logging.log(20, "Found: " + str(len(results)) + " to parse")
             # the idea here is
             # if an artist is found, return songs from this artist
             # elif an album is found, return songs from this album
             # elif a song is found, return song
-            artists = []
-            albums = []
-            songs = []
-            for result in results:
-                if result.type == MediaItemType.ARTIST:
-                    artists.append(result)
-                elif result.type == MediaItemType.ALBUM:
-                    albums.append(result)
-                elif result.type == MediaItemType.SONG:
-                    songs.append(result)
-                else:
-                    logging.log(20, "Item is not an Artist/Album/Song: " + result.type.value)
+        #     artists = []
+        #     albums = []
+        #     songs = []
+        #     for result in results:
+        #         if result.type == MediaItemType.ARTIST:
+        #             artists.append(result)
+        #         elif result.type == MediaItemType.ALBUM:
+        #             albums.append(result)
+        #         elif result.type == MediaItemType.SONG:
+        #             songs.append(result)
+        #         else:
+        #             logging.log(20, "Item is not an Artist/Album/Song: " + result.type.value)
+        #
+        #     if artists:
+        #         artist_songs = self.get_songs_by_artist(artists[0].id)
+        #         return 'artist', artist_songs
+        #     elif albums:
+        #         album_songs = self.get_songs_by_album(albums[0].id)
+        #         return 'album', album_songs
+        #     elif songs:
+        #         # if a song(s) matches pick the 1st
+        #         song_songs = self.convert_to_playable_songs(songs)
+        #         return 'song', song_songs
+        #     else:
+        #         return None, None
 
-            if artists:
-                artist_songs = self.get_songs_by_artist(artists[0].id)
-                return 'artist', artist_songs
-            elif albums:
-                album_songs = self.get_songs_by_album(albums[0].id)
-                return 'album', album_songs
-            elif songs:
-                # if a song(s) matches pick the 1st
-                song_songs = self.convert_to_playable_songs(songs)
-                return 'song', song_songs
-            else:
-                return None, None
+        # NEW CODE
+        artist_name = "unknown-artist"  
+        found_by = "yes"                   # assume "by" is in the phrase
+        intent = "unknown"                 # album, album-artist, artist, genre, music, playlist,
+                                           #   track, track-artist, unknown-artist or unknown
+        match_type = "unknown"             # album, artist, song or unknown
+        music_name = ""                    # search term of music being sought 
+        track_uris = []                    # URIs of songs to be played
+
+        phrase = phrase.lower()
+        self.log.log(20, "parse_common_phrase() phrase in lower case: " + phrase)
+
+        # check for a partial request with no music_name
+        match phrase:
+          case "album" | "track" | "song" | "artist" | "genre" | "playlist":
+            self.log.log(20, "parse_common_phrase() TODO: ====================> not enough information in request "+str(phrase))
+            return None, None
+        key = re.split(" by ", phrase)
+        if len(key) == 1:                  # did not find "by"
+          found_by = "no"
+          music_name = str(key[0])         # check for all music, genre and playlist 
+          self.log.log(20, "parse_common_phrase() music_name = "+music_name)
+          match music_name:
+            case "any music" | "all music" | "my music" | "random music" | "some music" | "music":
+              self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
+              track_uris = self.client.get_music("music", music_name, artist_name)
+              return "song", track_uris 
+          key = re.split("^genre ", music_name) 
+          self.log.log(20, "parse_common_phrase() key after genre "+str(len(key)))
+          if len(key) == 2:                # found first word "genre"
+            genre = str(key[1])
+            self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
+            track_uris = self.client.get_music("genre", genre, artist_name)
+            return "song", track_uris 
+          else:
+            key = re.split("^playlist ", music_name) 
+            if len(key) == 2:              # found first word "playlist"
+              playlist = str(key[1])
+              self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
+              track_uris = self.client.get_music("playlist", playlist, artist_name)
+              return "song", track_uris 
+        elif len(key) == 2:                # found one "by"
+          music_name = str(key[0])
+          artist_name = str(key[1])        # artist name follows "by" 
+        elif len(key) == 3:                # found "by" twice - assume first one is in music
+          music_name = str(key[0]) + " by " + str(key[1]) # paste the track or album back together
+          self.log.log(20, "parse_common_phrase() found the word by twice: assuming first is music_name")
+          artist_name = str(key[2])
+        else:                              # found more than 2 "by"s - what to do? 
+          music_name = str(key[0])
+
+        # look for leading keywords in music_name
+        key = re.split("^album |^record ", music_name) 
+        if len(key) == 2:                  # found first word "album" or "record"
+          match_type = "album"      
+          music_name = str(key[1])     
+          if found_by == "yes":
+            intent = "album-artist"
+          else:
+            intent = "album"
+          self.log.log(20, "parse_common_phrase() removed keyword album or record")
+        else:                              # leading "album" not found
+          key = re.split("^track |^song |^title ", music_name) 
+          if len(key) == 2:                # leading "track", "song" or "title" found
+            music_name = str(key[1])            
+            match_type = "song"       
+            if found_by == "yes":          # assume artist follows 'by'      
+              intent = "track-artist"
+            else:                          # assume track
+              intent = "track"
+            self.log.log(20, "parse_common_phrase() removed keyword track, song or title")
+          else:                            # leading keyword not found
+            key = re.split("^artist |^band ", music_name) # remove "artist" or "band" if first word
+            if len(key) == 2:              # leading "artist" or "band" found
+              music_name = "all_music"     # play all the songs they have
+              artist_name = str(key[1])   
+              match_type = "artist"      
+              intent = "artist"      
+              self.log.log(20, "parse_common_phrase() removed keyword artist or band from music_name")
+            else:                          # no leading keywords found yet
+                self.log.log(20, "parse_common_phrase() no keywords found: in last else clause")
+                if found_by == "yes":
+                  intent = "unknown-artist" # found artist but music could be track or album
+        key = re.split("^artist |^band ", artist_name) # remove "artist" or "band" if first word
+        if len(key) == 2:              # leading "artist" or "band" found in artist name
+          artist_name = str(key[1])
+          self.log.log(20, "parse_common_phrase() removed keyword artist or band from artist_name")
+        self.log.log(20, "parse_common_phrase() calling get_music with: "+intent+", "+music_name+", "+artist_name)
+        track_uris = self.client.get_music(intent, music_name, artist_name)
+        return match_type, track_uris 
+        # END NEW CODE
 
     def set_version(self):
         """
@@ -334,7 +381,7 @@ class EmbyCroft(object):
         try:
             self.version = subprocess.check_output(["git", "describe", "--always"]).strip().decode()
         except Exception as e:
-            self.log.log(20, "Failed to determine version with error: {}".format(str(e)))
+            self.log.log(20, "set_version() failed to determine version with error: {}".format(str(e)))
 
     @staticmethod
     def normalize_host(host: str):
@@ -359,7 +406,7 @@ class EmbyCroft(object):
         try:
             response = self.get_server_info_public()
         except Exception as e:
-            details = 'Error occurred when attempting to connect to the Emby server. Error: ' + str(e)
+            details = 'diag_public_server_info() error occurred when attempting to connect to the Emby server. Error: ' + str(e)
             self.log.log(20, details)
             server_info['Error'] = details
             return connection_success, server_info
@@ -370,12 +417,8 @@ class EmbyCroft(object):
             connection_success = True
         try:
             server_info = json.loads(response.text)
-            # backwards compatibility for old diag translations
-            if 'LocalAddress' not in server_info:
-                server_info['LocalAddress'] = "Not Available"
-
         except Exception as e:
-            details = 'Failed to parse server details, error: ' + str(e)
+            details = 'diag_public_server_info() failed to parse server details, error: ' + str(e)
             logging.log(20, details)
             server_info['Error'] = details
 

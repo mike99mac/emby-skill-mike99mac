@@ -38,11 +38,11 @@ class Emby(CommonPlaySkill):
         try:
             songs = self.emby_croft.handle_intent(intent, intent_type)
         except Exception as e:
-            self.log.log(20, e)
+            self.log.log(20, "handle_emby() e = "+e)
             self.speak_dialog('play_fail', {"media": intent})
 
         if not songs or len(songs) < 1:
-            self.log.log(20, 'No songs Returned')
+            self.log.log(20, 'handle_emby(): no songs Returned')
             self.speak_dialog('play_fail', {"media": intent})
         else:
             # setup audio service and play
@@ -58,7 +58,7 @@ class Emby(CommonPlaySkill):
     @intent_file_handler('diagnostic.intent')
     def handle_diagnostic(self, message):
 
-        self.log.log(20, message.data)
+        self.log.log(20, "handle_diagnostic(): message.data = " + message.data)
         self.speak_dialog('diag_start', wait=True)
 
         # connect to emby for diagnostics
@@ -109,29 +109,33 @@ class Emby(CommonPlaySkill):
         if not self.connect_to_emby():
             return None
 
-        self.log.log(20, phrase)
+        songs = []
+        self.log.log(20, "CPS_match_query_phrase() phrase = "+phrase)
         match_type, songs = self.emby_croft.parse_common_phrase(phrase)
 
         if match_type and songs:
             match_level = None
             if match_type is not None:
-                self.log.log(20, 'Found match of type: ' + match_type)
+                self.log.log(20, "CPS_match_query_phrase() found match of type: " + match_type)
 
                 if match_type == 'song' or match_type == 'album':
                     match_level = CPSMatchLevel.TITLE
                 elif match_type == 'artist':
                     match_level = CPSMatchLevel.ARTIST
 
-                self.log.log(20, 'match level' + str(match_level))
+                self.log.log(20, "CPS_match_query_phrase() match level = " + str(match_level))
 
             song_data = dict()
             song_data[phrase] = songs
-
-            self.log.log(20, "First 3 item urls returned")
+            # NEW CODE
+            num_songs = len(songs)
+            # self.log.log(20, "First 3 item urls returned")
+            self.log.log(20, "CPS_match_query_phrase() first "+str(num_songs)+" item urls returned")
+            # END NEW CODE
             max_songs_to_log = 3
             songs_logged = 0
             for song in songs:
-                self.log.log(20, song)
+                self.log.log(20, "CPS_match_query_phrase() song = "+song)
                 songs_logged = songs_logged + 1
                 if songs_logged >= max_songs_to_log:
                     break
@@ -156,7 +160,7 @@ class Emby(CommonPlaySkill):
                 self.device_id, diagnostic)
             auth_success = True
         except Exception as e:
-            self.log.log(20, "failed to connect to emby, error: {0}".format(str(e)))
+            self.log.log(20, "connect_to_emby() failed to connect to emby, error: {0}".format(str(e)))
 
         return auth_success
 
