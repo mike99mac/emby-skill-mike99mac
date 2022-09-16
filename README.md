@@ -1,6 +1,15 @@
 [![Build Status](https://travis-ci.com/rickyphewitt/emby-skill.svg?branch=master)](https://travis-ci.com/rickyphewitt/emby-skill)
 # Emby
 This skill allows audio playback from an Emby server
+This is a fork of the emby skill by rickyphewitt. It adds to voice commands to play music:
+* play {music_name}
+* play (track|song|title|) {track} by (artist|band|) {artist}
+* play (album|record) {album} by (artist|band) {artist}
+* play (any|all|my|random|some|) music 
+* play (playlist) {playlist} 
+* Play (genre) {genre}     
+Note: playlist and genre are only framed out.  The heavy lifting code is not written yet.
+
 
 ## About 
 Stream music from your Emby server using Mycroft! Play all songs by an artist or an instant mix of any artist/album/song in your Emby library. 
