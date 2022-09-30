@@ -5,7 +5,7 @@ from mycroft.skills.audioservice import AudioService
 from mycroft.api import DeviceApi
 
 from .emby_croft import EmbyCroft
-
+from .music_info import Music_info
 
 class Emby(CommonPlaySkill):
 
@@ -82,12 +82,29 @@ class Emby(CommonPlaySkill):
 
         self.speak_dialog('diagnostic')
 
+    # NEW CODE - for manipulating playlists
+    @intent_file_handler('playlist.intent')
+    def handle_playlist(self, message):
+      utterance = str(message.data["utterance"])
+      self.log.log(20, "handle_playlist(): utterance = "+utterance) 
+
+      # first thing is connect to emby or bail
+      if not self.connect_to_emby():
+        self.speak_dialog('configuration_fail')
+        return
+
+      # return value is file name of .dialog file to speak and any info to be added
+      mesg_info = []
+      mesg_file, mesg_info = self.emby_croft.manipulate_playlists(utterance)
+      if [ mesg_file != None ]:                # there is a reply to speak
+        self.speak_dialog(mesg_file, data=mesg_info)
+    # END NEW CODE
+
     def stop(self):
         pass
 
     def CPS_start(self, phrase, data):
         """ Starts playback.
-
             Called by the playback control skill to start playback if the
             skill is selected (has the best match level)
         """
@@ -97,9 +114,7 @@ class Emby(CommonPlaySkill):
 
     def CPS_match_query_phrase(self, phrase):
         """ This method responds whether the skill can play the input phrase.
-
             The method is invoked by the PlayBackControlSkill.
-
             Returns: tuple (matched phrase(str),
                             match level(CPSMatchLevel),
                             optional data(dict))
@@ -109,21 +124,34 @@ class Emby(CommonPlaySkill):
         if not self.connect_to_emby():
             return None
 
+        # NEW CODE
         songs = []
         self.log.log(20, "CPS_match_query_phrase() phrase = "+phrase)
-        match_type, songs = self.emby_croft.parse_common_phrase(phrase)
+        # match_type, mesg_file, mesg_info, songs = self.emby_croft.parse_common_phrase(phrase)
+        music_info = self.emby_croft.parse_common_phrase(phrase)
+        match_type = music_info.match_type
+        self.log.log(20, "CPS_match_query_phrase() match_type = "+match_type)
+        mesg_file = music_info.mesg_file
+        mesg_info = music_info.mesg_info
+        songs = music_info.track_uris
+        self.log.log(20, "CPS_match_query_phrase() type(songs) = "+str(type(songs)))
+        self.log.log(20, "CPS_match_query_phrase() type(mesg_file) = "+str(type(mesg_file)))
+        self.log.log(20, "CPS_match_query_phrase() type(mesg_info) = "+str(type(mesg_info)))
+        if mesg_file != None:
+          self.log.log(20, "CPS_match_query_phrase() mesg_file = "+mesg_file)
+          if mesg_info != None:
+            self.log.log(20, "CPS_match_query_phrase() mesg_info = "+str(mesg_info))
+          self.speak_dialog(mesg_file, mesg_info) # have Mycroft speak the message
+        # END NEW CODE  
 
         if match_type and songs:
             match_level = None
             if match_type is not None:
-                self.log.log(20, "CPS_match_query_phrase() found match of type: " + match_type)
-
                 if match_type == 'song' or match_type == 'album':
                     match_level = CPSMatchLevel.TITLE
                 elif match_type == 'artist':
                     match_level = CPSMatchLevel.ARTIST
-
-                self.log.log(20, "CPS_match_query_phrase() match level = " + str(match_level))
+                self.log.log(20, "CPS_match_query_phrase() match level = "+str(match_level))
 
             song_data = dict()
             song_data[phrase] = songs
@@ -135,7 +163,7 @@ class Emby(CommonPlaySkill):
             max_songs_to_log = 3
             songs_logged = 0
             for song in songs:
-                self.log.log(20, "CPS_match_query_phrase() song = "+song)
+                self.log.log(20, "CPS_match_query_phrase() song = "+str(song))
                 songs_logged = songs_logged + 1
                 if songs_logged >= max_songs_to_log:
                     break

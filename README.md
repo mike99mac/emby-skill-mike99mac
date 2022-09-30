@@ -46,6 +46,10 @@ Always looking for bug fixes, features, translation, and feedback that make the 
     * This will attempt to connect then authenticate to your Emby server using the connection info provided above
 
 ### Dev Notes
+Change log:
+* 30 Sep 2022  Bubble up messages to speak before playing music, playlist support
+* 16 Sep 2022  Initial fork - more robust vocabulary 
+
 Skill is broken down into 3 main parts
 * emby_client.py
     * An intentionally lean synchronous Emby client

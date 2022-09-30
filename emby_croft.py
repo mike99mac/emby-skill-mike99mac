@@ -5,6 +5,7 @@ from random import shuffle
 from collections import defaultdict
 import json
 import re
+from .music_info import Music_info
 
 try:
     # this import works when installing/running the skill
@@ -224,6 +225,38 @@ class EmbyCroft(object):
           response_json = response.json()
           return response_json["Items"]
 
+  #  OLD CODE - commented out
+  #  def smart_parse_common_phrase(self, phrase: str):
+  #      """
+  #      Attempt to get keywords in phrase such as
+  #      {artist/album/song} and determine a users
+  #      intent
+  #      :param phrase:
+  #      :return:
+  #      """
+  #      removals = ['emby', 'mb']  
+  #      media_types = {'artist': MediaItemType.ARTIST,
+  #                     'album': MediaItemType.ALBUM,
+  #                     'song': MediaItemType.SONG}
+  #
+  #      phrase = phrase.lower() 
+  #
+  #      for removal in removals:
+  #          phrase = phrase.replace(removal, "")
+  #
+        # determine intent if exists
+        # does not handle play album by artist
+  #      intent = None
+  #      for media_type in media_types.keys():
+  #          if media_type in phrase:
+  #              intent = media_types.get(media_type)
+  #              logging.log(20, "Found intent in common phrase: " + media_type)
+  #              phrase = phrase.replace(media_type, "")
+  #              break
+  #
+  #      return phrase, intent
+   
+
     def parse_common_phrase(self, phrase: str):
         """
         Attempts to match emby items with phrase
@@ -281,97 +314,37 @@ class EmbyCroft(object):
         #     else:
         #         return None, None
 
-        # NEW CODE
-        artist_name = "unknown-artist"  
-        found_by = "yes"                   # assume "by" is in the phrase
-        intent = "unknown"                 # album, album-artist, artist, genre, music, playlist,
-                                           #   track, track-artist, unknown-artist or unknown
-        match_type = "unknown"             # album, artist, song or unknown
-        music_name = ""                    # search term of music being sought 
-        track_uris = []                    # URIs of songs to be played
+    # NEW CODE
+        ret_val = self.client.parse_music(phrase)
+        self.log.log(20, "parse_common_phrase() - returning Music_info object of type "+str(type(ret_val))) 
+        self.log.log(20, "parse_common_phrase() - ret_val.track_uris of type "+str(type(ret_val.track_uris))) 
+        return ret_val
 
-        phrase = phrase.lower()
-        self.log.log(20, "parse_common_phrase() phrase in lower case: " + phrase)
-
-        # check for a partial request with no music_name
-        match phrase:
-          case "album" | "track" | "song" | "artist" | "genre" | "playlist":
-            self.log.log(20, "parse_common_phrase() TODO: ====================> not enough information in request "+str(phrase))
-            return None, None
-        key = re.split(" by ", phrase)
-        if len(key) == 1:                  # did not find "by"
-          found_by = "no"
-          music_name = str(key[0])         # check for all music, genre and playlist 
-          self.log.log(20, "parse_common_phrase() music_name = "+music_name)
-          match music_name:
-            case "any music" | "all music" | "my music" | "random music" | "some music" | "music":
-              self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
-              track_uris = self.client.get_music("music", music_name, artist_name)
-              return "song", track_uris 
-          key = re.split("^genre ", music_name) 
-          self.log.log(20, "parse_common_phrase() key after genre "+str(len(key)))
-          if len(key) == 2:                # found first word "genre"
-            genre = str(key[1])
-            self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
-            track_uris = self.client.get_music("genre", genre, artist_name)
-            return "song", track_uris 
-          else:
-            key = re.split("^playlist ", music_name) 
-            if len(key) == 2:              # found first word "playlist"
-              playlist = str(key[1])
-              self.log.log(20, "parse_common_phrase() removed keyword "+music_name+" from music_name")
-              track_uris = self.client.get_music("playlist", playlist, artist_name)
-              return "song", track_uris 
-        elif len(key) == 2:                # found one "by"
-          music_name = str(key[0])
-          artist_name = str(key[1])        # artist name follows "by" 
-        elif len(key) == 3:                # found "by" twice - assume first one is in music
-          music_name = str(key[0]) + " by " + str(key[1]) # paste the track or album back together
-          self.log.log(20, "parse_common_phrase() found the word by twice: assuming first is music_name")
-          artist_name = str(key[2])
-        else:                              # found more than 2 "by"s - what to do? 
-          music_name = str(key[0])
-
-        # look for leading keywords in music_name
-        key = re.split("^album |^record ", music_name) 
-        if len(key) == 2:                  # found first word "album" or "record"
-          match_type = "album"      
-          music_name = str(key[1])     
-          if found_by == "yes":
-            intent = "album-artist"
-          else:
-            intent = "album"
-          self.log.log(20, "parse_common_phrase() removed keyword album or record")
-        else:                              # leading "album" not found
-          key = re.split("^track |^song |^title ", music_name) 
-          if len(key) == 2:                # leading "track", "song" or "title" found
-            music_name = str(key[1])            
-            match_type = "song"       
-            if found_by == "yes":          # assume artist follows 'by'      
-              intent = "track-artist"
-            else:                          # assume track
-              intent = "track"
-            self.log.log(20, "parse_common_phrase() removed keyword track, song or title")
-          else:                            # leading keyword not found
-            key = re.split("^artist |^band ", music_name) # remove "artist" or "band" if first word
-            if len(key) == 2:              # leading "artist" or "band" found
-              music_name = "all_music"     # play all the songs they have
-              artist_name = str(key[1])   
-              match_type = "artist"      
-              intent = "artist"      
-              self.log.log(20, "parse_common_phrase() removed keyword artist or band from music_name")
-            else:                          # no leading keywords found yet
-                self.log.log(20, "parse_common_phrase() no keywords found: in last else clause")
-                if found_by == "yes":
-                  intent = "unknown-artist" # found artist but music could be track or album
-        key = re.split("^artist |^band ", artist_name) # remove "artist" or "band" if first word
-        if len(key) == 2:              # leading "artist" or "band" found in artist name
-          artist_name = str(key[1])
-          self.log.log(20, "parse_common_phrase() removed keyword artist or band from artist_name")
-        self.log.log(20, "parse_common_phrase() calling get_music with: "+intent+", "+music_name+", "+artist_name)
-        track_uris = self.client.get_music(intent, music_name, artist_name)
-        return match_type, track_uris 
-        # END NEW CODE
+    # Vocabulary for manipulating playlists:
+    #   (create|make) playlist {playlist} from track {track}
+    #   (delete|remove) playlist {playlist}
+    #   add (track|song|title) {track} to playlist {playlist}
+    #   add (album|record) {album} to playlist {playlist}
+    #   (remove|delete) (track|song|title) {track} from playlist {playlist}
+    #   (remove|delete) (album|record) {album} from playlist {playlist}
+    #
+    # return value is file name of .dialog file (str) to speak and any info to be added (dict)
+    def manipulate_playlists(self, utterance):
+      self.log.log(20, "manipulate_playlists() called with: "+utterance) 
+      words = utterance.split()            # split request into words
+      match words[0]:                      
+        case "create" | "make":         
+          mesg_file, mesg_info = self.client.create_playlist(words[2:]) 
+        case "remove" | "delete":      
+          if words[1] == "playlist":
+            mesg_file, mesg_info = self.client.delete_playlist(words[2:]) 
+          else:                       
+            mesg_file, mesg_info = self.client.delete_from_playlist(words[1:]) 
+        case "add":                  
+          mesg_file, mesg_info = self.client.add_to_playlist(words[1:]) 
+      self.log.log(20, "manipulate_playlists() returned: "+mesg_file+" and "+str(mesg_info))
+      return mesg_file, mesg_info
+    # END NEW CODE
 
     def set_version(self):
         """
