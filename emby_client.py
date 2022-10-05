@@ -59,9 +59,7 @@ class PublicEmbyClient(object):
         self.client = client
         self.client_id = client_id
         self.version = version
-        # NEW CODE
-        # self.playing = True                # will we be playing music (or just searching)?
-        # END NEW CODE
+  
     def get_server_info_public(self):
         return requests.get(self.host + SERVER_INFO_PUBLIC_URL)
 
@@ -180,7 +178,7 @@ class EmbyClient(PublicEmbyClient):
     # play (playlist) {playlist}
     # play (genre) {genre}     
     #
-    def _delete(self, url):  
+    def _delete(self, url, payload):  
       """
       HTTP delete method with host and headers provided
       """
@@ -610,7 +608,6 @@ class EmbyClient(PublicEmbyClient):
       Create requires a playlist name and music name as Emby playlists cannot be empty
       Vocabulary:  (create|make) playlist {playlist} from (track|song|title) {track}
       """
-    # self.playing = False                 # will not be playing music
       phrase = " ".join(phrase)            # convert list back to string
       phrase_encoded = urllib.parse.quote(phrase) # encode playlist name
       self.log.log(20, "create_playlist() called with phrase: "+phrase)
@@ -661,6 +658,7 @@ class EmbyClient(PublicEmbyClient):
       Vocabulary: (delete|remove) playlist {playlist}
       """
       self.log.log(20, "delete_playlist() called with phrase: "+str(playlist_name))
+
       return False
 
     def get_playlist_track_ids(self, playlist_id):
@@ -732,7 +730,6 @@ class EmbyClient(PublicEmbyClient):
         mesg_info = {'status_code': response.status_code}
         return "bad_emby_api", mesg_info
       
-   
     def delete_from_playlist(self, phrase):
       """
       Delete a track from a playlist
@@ -741,7 +738,47 @@ class EmbyClient(PublicEmbyClient):
         (remove|delete) (album|record) {album} from playlist {playlist}
       """
       self.log.log(20, "delete_from_playlist() called with phrase: "+str(phrase))
-      return False  
+      phrase = " ".join(phrase)            # convert list back to string
+      key = re.split(" from playlist ", phrase)
+      if len(key) == 1:                    # did not find "from playlist"
+        self.log.log(20, "delete_from_playlist() ERROR 'from playlist' not found in phrase")
+        return "to_playlist_missing", {} 
+      music_name = key[0]
+      playlist_name = key[1] 
+      self.log.log(20, "delete_from_playlist() music_name = "+music_name+" playlist_name = "+playlist_name)
+
+      # verify playlist exists
+      playlist_id = self.get_playlist_id(playlist_name) 
+      if playlist_id == -1:                # not found
+        self.log.log(20, "delete_from_playlist() did not find playlist_name "+playlist_name)
+        mesg_info = {'playlist_name': playlist_name}
+        return "missing_playlist", mesg_info
+      
+      # verify track or album exists - parse_music() returns URIs but we want track IDs 
+      music_info = self.parse_music(music_name) 
+      if music_info.track_uris == None:
+        self.log.log(20, "delete_from_playlist() did not find track or album "+music_name)
+        mesg_info = {"playlist_name": playlist_name, "music_name": music_name} 
+        return "playlist_missing_track", mesg_info
+      self.log.log(20, "delete_from_playlist() music_info.track_uris = "+str(music_info.track_uris))
+      track_id = self.get_id_from_uri(music_info.track_uris)
+      self.log.log(20, "delete_from_playlist() track_id = "+track_id)
+
+      # remove track from playlist  
+    # payload = {'Id': track_id, 'UserId': self.auth.user_id}
+      payload = {'Id': track_id, 'EntryId': "1_810ne0fn"}
+      payload.update(self.get_headers())
+      url = ITEMS_URL+"/"+playlist_id+"?"+API_KEY+self.auth.token
+      self.log.log(20, "delete_from_playlist() url = "+url)
+      self.log.log(20, "delete_from_playlist() payload = "+str(payload))
+      response = self._delete(url, payload)
+      self.log.log(20, "delete_from_playlist() response.status_code = "+str(response.status_code))
+      self.log.log(20, "delete_from_playlist() response.url = "+str(response.url))
+      if 200 <= response.status_code < 300:
+        return "ok_its_done", {}
+      else:                                # not a 2xx return code
+        mesg_info = {'status_code': response.status_code}
+        return "bad_emby_api", mesg_info
     # END NEW CODE
     
 class EmbyAuthorization(object):

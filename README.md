@@ -47,6 +47,7 @@ Always looking for bug fixes, features, translation, and feedback that make the 
 
 ### Dev Notes
 Change log:
+*  5 Oct 2022  Start work on deletion of playlists
 * 30 Sep 2022  Bubble up messages to speak before playing music, playlist support
 * 16 Sep 2022  Initial fork - more robust vocabulary 
 
