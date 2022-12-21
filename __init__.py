@@ -1,196 +1,127 @@
+#!/usr/bin/python3
+#
+#            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+#   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+#
+#  0. You just DO WHAT THE FUCK YOU WANT TO.
+#
 import hashlib
 from mycroft import intent_file_handler
 from mycroft.skills.common_play_skill import CommonPlaySkill, CPSMatchLevel
 from mycroft.skills.audioservice import AudioService
 from mycroft.api import DeviceApi
-
-from .emby_croft import EmbyCroft
+from .mpc_croft import MpcCroft
+# from mpd import MPDClient 
 from .music_info import Music_info
+import subprocess
 
-class Emby(CommonPlaySkill):
+# mpcc = MPDClient()  
+# mpcc.timeout = 10                # network timeout in seconds (floats allowed), default: None
+# mpcc.idletimeout = None          # timeout for fetching the result of the idle command is handled seperately, default: None
 
-    def __init__(self):
-        super().__init__()
-        self._setup = False
-        self.audio_service = None
-        self.emby_croft = None
-        self.device_id = hashlib.md5(
-            ('Emby'+DeviceApi().identity.uuid).encode())\
-            .hexdigest()
+class Mpc(CommonPlaySkill):
 
-    def initialize(self):
-        pass
+  def __init__(self):
+    super().__init__()
+    self._setup = False
+    self.audio_service = None
+    self.mpc_croft = MpcCroft("/home/pi/usbdrive/music/")
+    self.device_id = hashlib.md5(('Mpc'+DeviceApi().identity.uuid).encode()).hexdigest()
 
-    @intent_file_handler('emby.intent')
-    def handle_emby(self, message):
+  def initialize(self):
+    music_info = Music_info("", "", {}, []) # music to play 
+    self._audio_session_id: Optional[str] = None
+    self._stream_session_id: Optional[str] = None
+    self._is_playing = False
+    self.register_handlers()
 
-        self.log.log(20, message.data)
+  def initialize(self):
+    pass
 
-        # first thing is connect to emby or bail
-        if not self.connect_to_emby():
-            self.speak_dialog('configuration_fail')
-            return
+  def register_handlers(self):
+    """Register handlers for events to or from the GUI."""
+    self.bus.on("mycroft.audio.service.playing", self.handle_media_playing)
+    self.bus.on("mycroft.audio.service.stopped", self.handle_media_stopped)
+    self.bus.on("play:pause", self.handle_pause)
+    self.bus.on("play:resume", self.handle_resume)
+    self.add_event("gui.namespace.displayed", self.handle_gui_namespace_displayed)
+    self.bus.on("mycroft.audio.service.position", self.handle_media_position)
+    self.bus.on("mycroft.audio.queue_end", self.handle_media_finished)
 
-        # determine intent
-        intent, intent_type = EmbyCroft.determine_intent(message.data)
+  def speak_playing(self, media):
+    data = dict()
+    data['media'] = media
+    self.speak_dialog('mpc', data)
 
-        songs = []
-        try:
-            songs = self.emby_croft.handle_intent(intent, intent_type)
-        except Exception as e:
-            self.log.log(20, "handle_emby() e = "+e)
-            self.speak_dialog('play_fail', {"media": intent})
+  def handle_media_stopped(self, message):
+    mycroft_session_id = message.data.get("mycroft_session_id")
+    if mycroft_session_id == self._stream_session_id:
+      self._is_playing = False
 
-        if not songs or len(songs) < 1:
-            self.log.log(20, 'handle_emby(): no songs Returned')
-            self.speak_dialog('play_fail', {"media": intent})
-        else:
-            # setup audio service and play
-            self.audio_service = AudioService(self.bus)
-            self.speak_playing(intent)
-            self.audio_service.play(songs, message.data['utterance'])
+  @intent_file_handler('playlist.intent')
+  def handle_playlist(self, message):
+    utterance = str(message.data["utterance"])
+    self.log.log(20, "handle_playlist(): utterance = "+utterance) 
 
-    def speak_playing(self, media):
-        data = dict()
-        data['media'] = media
-        self.speak_dialog('emby', data)
+    # return value is file name of .dialog file to speak and values to be plugged in
+    mesg_info = []
+    mesg_file, mesg_info = self.mpc_croft.manipulate_playlists(utterance)
+    if [ mesg_file != None ]:                # there is a reply to speak
+      self.speak_dialog(mesg_file, data=mesg_info, wait=True)
 
-    @intent_file_handler('diagnostic.intent')
-    def handle_diagnostic(self, message):
+  def stop(self):
+    self.log.log(20, "stop() - clearing queue") 
+    return
+    # cmd = ["/usr/bin/mpc", "clear"]
+    # self.log.log(20, "stop(): running cmd = "+str(cmd))
+    subprocess.Popen("/usr/bin/mpc clear", shell=True) 
 
-        self.log.log(20, "handle_diagnostic(): message.data = " + message.data)
-        self.speak_dialog('diag_start', wait=True)
+  def CPS_start(self, phrase, data):
+    """ 
+    Start playback - called by the playback control skill to start playback if the
+    skill is selected (has the best match level)
+    Clear the queue, add all tracks passed in then play them
+    """
+    # self.speak_dialog(self.music_info.mesg_file, self.music_info.mesg_info, wait=True) # have Mycroft speak the message  
+    self.log.log(20, "CPS_start(): running: /usr/bin/mpc clear")
+    subprocess.Popen("/usr/bin/mpc clear", shell=True) 
+    for next_file in self.music_info.track_files: # add track(s) to the queue
+      self.log.log(20, 'CPS_start(): calling: /usr/bin/mpc add '+next_file)
+      subprocess.Popen("/usr/bin/mpc add "+next_file, shell=True)
+    self.log.log(20, "CPS_start(): calling: /usr/bin/mpc play")
+    subprocess.Popen("/usr/bin/mpc play", shell=True)   
+  
+  def CPS_match_query_phrase(self, phrase):
+    """ Return whether the skill can play input phrase or not - invoked by the PlayBackControlSkill.
+        Returns: tuple (matched phrase(str),
+                        match level(CPSMatchLevel),
+                        optional data(dict))
+                 or None if no match was found.
+        """    
+    self.log.log(20, "CPS_match_query_phrase() searching for phrase = "+phrase)
+    self.music_info = self.mpc_croft.parse_common_phrase(phrase)
+    self.log.log(20, "CPS_match_query_phrase() match_type = "+str(self.music_info.match_type))
+    self.log.log(20, "CPS_match_query_phrase() mesg_file = "+self.music_info.mesg_file)
+    self.log.log(20, "CPS_match_query_phrase() mesg_info = "+str(self.music_info.mesg_info))
+    self.log.log(20, "CPS_match_query_phrase() track_files = "+str(self.music_info.track_files))
+    self.log.log(20, "CPS_match_query_phrase() calling speak.dialog")  
+    # self.speak_dialog(mesg_file, mesg_info, wait=True) # have Mycroft speak the message
+    # self.speak_dialog(self.music_info.mesg_file, self.music_info.mesg_info) # have Mycroft speak the message  
 
-        # connect to emby for diagnostics
-        self.connect_to_emby(diagnostic=True)
-        connection_success, info = self.emby_croft.diag_public_server_info()
-
-        if connection_success:
-            self.speak_dialog('diag_public_info_success', info,  wait=True)
-        else:
-            self.speak_dialog('diag_public_info_fail', {'host': self.settings['hostname']},  wait=True)
-            self.speak_dialog('general_check_settings_logs',  wait=True)
-            self.speak_dialog('diag_stop')
-            return
-
-        if not self.connect_to_emby():
-            self.speak_dialog('diag_auth_fail',  wait=True)
-            self.speak_dialog('diag_stop')
-            return
-        else:
-            self.speak_dialog('diag_auth_success',  wait=True)
-
-        self.speak_dialog('diagnostic')
-
-    # NEW CODE - for manipulating playlists
-    @intent_file_handler('playlist.intent')
-    def handle_playlist(self, message):
-      utterance = str(message.data["utterance"])
-      self.log.log(20, "handle_playlist(): utterance = "+utterance) 
-      if not self.connect_to_emby():        # connect to emby or bail
-        self.speak_dialog('configuration_fail')
-        return
-
-      # return value is file name of .dialog file to speak and values to be plugged in
-      mesg_info = []
-      mesg_file, mesg_info = self.emby_croft.manipulate_playlists(utterance)
-      if [ mesg_file != None ]:                # there is a reply to speak
-        self.speak_dialog(mesg_file, data=mesg_info, wait=True)
-    # END NEW CODE
-
-    def stop(self):
-        pass
-
-    def CPS_start(self, phrase, data):
-        """ Starts playback.
-            Called by the playback control skill to start playback if the
-            skill is selected (has the best match level)
-        """
-        # setup audio service
-        self.audio_service = AudioService(self.bus)
-        self.audio_service.play(data[phrase])
-
-    def CPS_match_query_phrase(self, phrase):
-        """ This method responds whether the skill can play the input phrase.
-            The method is invoked by the PlayBackControlSkill.
-            Returns: tuple (matched phrase(str),
-                            match level(CPSMatchLevel),
-                            optional data(dict))
-                     or None if no match was found.
-        """
-        # first thing is connect to emby or bail
-        if not self.connect_to_emby():
-            return None
-
-        # NEW CODE
-        songs = []
-        self.log.log(20, "CPS_match_query_phrase() phrase = "+phrase)
-        music_info = self.emby_croft.parse_common_phrase(phrase)
-        match_type = music_info.match_type
-        self.log.log(20, "CPS_match_query_phrase() match_type = "+match_type)
-        mesg_file = music_info.mesg_file
-        mesg_info = music_info.mesg_info
-        songs = music_info.track_uris
-        self.log.log(20, "CPS_match_query_phrase() type(songs) = "+str(type(songs)))
-        if mesg_file != None:
-          self.log.log(20, "CPS_match_query_phrase() mesg_file = "+mesg_file)
-          if mesg_info != None:
-            self.log.log(20, "CPS_match_query_phrase() mesg_info = "+str(mesg_info))
-          self.log.log(20, "CPS_match_query_phrase() calling speak.dialog with wait=True")  
-        #  self.speak_dialog(mesg_file, mesg_info, wait=True) # have Mycroft speak the message
-          self.speak_dialog(mesg_file, mesg_info) # have Mycroft speak the message
-        # END NEW CODE  
-
-        if match_type and songs:
-            match_level = None
-            if match_type is not None:
-                if match_type == 'song' or match_type == 'album':
-                    match_level = CPSMatchLevel.TITLE
-                    match_level = CPSMatchLevel.EXACT
-                elif match_type == 'artist':
-                    match_level = CPSMatchLevel.ARTIST
-                    match_level = CPSMatchLevel.EXACT
-            self.log.log(20, "CPS_match_query_phrase() match level = "+str(match_level))
-
-            song_data = dict()
-            song_data[phrase] = songs
-            # NEW CODE
-            num_songs = len(songs)
-            # self.log.log(20, "First 3 item urls returned")
-            self.log.log(20, "CPS_match_query_phrase() first "+str(num_songs)+" item urls returned")
-            # END NEW CODE
-            max_songs_to_log = 3
-            songs_logged = 0
-            for song in songs:
-                self.log.log(20, "CPS_match_query_phrase() song = "+str(song))
-                songs_logged = songs_logged + 1
-                if songs_logged >= max_songs_to_log:
-                    break
-
-            return phrase, match_level, song_data
-        else:
-            return None
-
-    def connect_to_emby(self, diagnostic=False):
-        """
-        Attempts to connect to the server based on the config
-        if diagnostic is False an attempt to auth is also made
-        returns true/false on success/failure respectively
-
-        :return:
-        """
-        auth_success = False
-        try:
-            self.emby_croft = EmbyCroft(
-                self.settings["hostname"] + ":" + str(self.settings["port"]),
-                self.settings["username"], self.settings["password"],
-                self.device_id, diagnostic)
-            auth_success = True
-        except Exception as e:
-            self.log.log(20, "connect_to_emby() failed to connect to emby, error: {0}".format(str(e)))
-
-        return auth_success
-
+    if self.music_info.track_files:        # music was found
+      # track_files = []
+      track_files = self.music_info.track_files
+      num_tracks = len(track_files)
+      self.log.log(20, "CPS_match_query_phrase() first "+str(num_tracks)+" file names returned")
+      tracks_logged = 0
+      for track in self.music_info.track_files: # log first three tracks on the queue
+        self.log.log(20, "CPS_match_query_phrase() track = "+str(track))
+        tracks_logged = tracks_logged + 1
+        if tracks_logged >= 3:
+          break
+      return phrase, CPSMatchLevel.EXACT, {}
+    else:                                  # no music found
+      return None
 
 def create_skill():
-    return Emby()
+    return Mpc()
